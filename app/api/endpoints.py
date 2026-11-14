@@ -28,3 +28,15 @@ def spherexpng(
 )
 def hello(number: float):
     return Response(content=f"Hello, World! {number}", media_type="text/plain")
+
+@router.get("/images") #this was to test while the image playback was being developed
+def images():
+    return {
+        "frames": [
+            {"date": "2025-01-01", "src": "/assets/images/mock/mock_one.png"},
+            {"date": "2025-01-02", "src": "/assets/images/mock/mock_two.png"},
+            {"date": "2025-01-03", "src": "/assets/images/mock/mock_three.png"},
+            {"date": "2025-01-04", "src": "/assets/images/mock/mock_four.png"},
+            {"date": "2025-01-05", "src": "/assets/images/mock/mock_five.png"},
+        ]
+    }
