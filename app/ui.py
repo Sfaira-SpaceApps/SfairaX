@@ -1,3 +1,5 @@
+from datetime import date
+
 import httpx
 from fastapi import FastAPI
 from nicegui import ui
@@ -13,7 +15,7 @@ def register_ui(app: FastAPI):
             declination = ui.number(label="Declination", value=0, format='%.2f')
             color_theme = ui.select(["plasma", "viridis", "inferno", "magma"], label="Color Theme", value="plasma")
             cutout_size = ui.number(
-                label="Cutout Size", value=0.05, min=0.01, max=1,
+                label="Cutout Size (arcsec)", value=0.05, min=0.01, max=1,
                 step=0.01, format='%.2f',
             )
 
@@ -73,30 +75,7 @@ def register_ui(app: FastAPI):
 
 
         async def fetch_spherexpng():
-            # Implement the logic to fetch the spherexpng image here
-            result.set_text("loading...")
-            button.disable()
-
-            try:
-                async with httpx.AsyncClient(
-                    transport=httpx.ASGITransport(app=app),
-                    base_url="http://internal"
-                ) as client:
-                    response = await client.get(
-                        "/spherexpng",
-                        params={
-                            "ra_deg": right_angle.value,
-                            "dec_deg": declination.value,
-                            "cutout_size_i": cutout_size.value,
-                            "fake_color_theme": color_theme.value,
-                        },
-                    )
-                    response.raise_for_status()
-                    result.set_text(response.text)
-            except httpx.HTTPError:
-                result.set_text("Failed to load result")
-            finally:
-                button.enable()
+            await load_images()
 
         async def fetch_from_dataset():
             if dataset.value == "SphereX":
@@ -154,10 +133,11 @@ def register_ui(app: FastAPI):
         frame_rate_slider.on_value_change(update_frame_rate)
 
 
-        async def load_images():
+        async def load_images(mock=False):
             nonlocal frames, frame_index
             timer.deactivate()
             load_button.disable()
+            button.disable()
             play_button.disable()
             pause_button.disable()
             frame_label.set_text("Loading images...")
@@ -166,12 +146,39 @@ def register_ui(app: FastAPI):
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=app),
                     base_url="http://internal",
-                    timeout=30,
+                    timeout=120,
                 ) as client:
-                    response = await client.get("/images")
+                    if mock:
+                        response = await client.get("/images")
+                    else:
+                        date_parts = (date_input.value or "").split(" - ")
+                        if len(date_parts) != 2:
+                            raise ValueError("Enter a start and end date: YYYY-MM-DD - YYYY-MM-DD.")
+                        try:
+                            start, end = [date.fromisoformat(part.strip()) for part in date_parts]
+                        except ValueError:
+                            raise ValueError("Enter valid dates in YYYY-MM-DD format.") from None
+                        if start > end:
+                            raise ValueError("Start date must precede end date.")
+                        response = await client.get(
+                            "/spherex/observations",
+                            params={
+                                "ra_deg": right_angle.value,
+                                "dec_deg": declination.value,
+                                "cutout_size_i": cutout_size.value,
+                                "fake_color_theme": color_theme.value,
+                                "time_start": start.isoformat(),
+                                "time_end": end.isoformat(),
+                            },
+                        )
                     response.raise_for_status()
 
                 loaded_frames = response.json()["frames"]
+                if not mock:
+                    loaded_frames = [
+                        {**frame, "src": frame["image_url"]}
+                        for frame in sorted(loaded_frames, key=lambda frame: frame["mjd"])
+                    ]
                 if not isinstance(loaded_frames, list) or any(
                     not isinstance(frame, dict)
                     or not isinstance(frame.get("src"), str)
@@ -186,18 +193,34 @@ def register_ui(app: FastAPI):
                     show_frame()
                     play_button.enable()
                     pause_button.enable()
+                    result.set_text(f"Loaded {len(frames)} frames.")
                 else:
                     image.set_visibility(False)
                     frame_label.set_text("No images returned.")
-            except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                 frames = []
                 image.set_visibility(False)
-                frame_label.set_text("Failed to load images. Try again.")
+                message = "Failed to load images. Try again."
+                if isinstance(exc, httpx.HTTPStatusError):
+                    try:
+                        detail = exc.response.json().get("detail")
+                        if isinstance(detail, str):
+                            message = detail
+                    except ValueError:
+                        pass
+                elif isinstance(exc, ValueError):
+                    message = str(exc)
+                frame_label.set_text(message)
+                result.set_text(message)
             finally:
                 load_button.enable()
+                button.enable()
 
         with ui.row().classes("items-center gap-4"):
-            load_button = ui.button("Load images", on_click=load_images)
+            async def load_mock_images():
+                await load_images(mock=True)
+
+            load_button = ui.button("Load mock images", on_click=load_mock_images)
             play_button = ui.button("Play", on_click=timer.activate)
             pause_button = ui.button("Pause", on_click=timer.deactivate)
             ui.button("<", on_click=prev_frame)
