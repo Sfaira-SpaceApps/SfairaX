@@ -12,7 +12,10 @@ def register_ui(app: FastAPI):
             right_angle = ui.number(label="Right Angle", value=0, format='%.2f')
             declination = ui.number(label="Declination", value=0, format='%.2f')
             color_theme = ui.select(["plasma", "viridis", "inferno", "magma"], label="Color Theme", value="plasma")
-            cutout_size = ui.number(label="Cutout Size", value=0, format='%.2f')
+            cutout_size = ui.number(
+                label="Cutout Size", value=0.05, min=0.01, max=1,
+                step=0.01, format='%.2f',
+            )
 
             with ui.input(
                 "Date range",
@@ -68,7 +71,7 @@ def register_ui(app: FastAPI):
             finally:
                 button.enable()
 
-        
+
         async def fetch_spherexpng():
             # Implement the logic to fetch the spherexpng image here
             result.set_text("loading...")
@@ -95,11 +98,11 @@ def register_ui(app: FastAPI):
             finally:
                 button.enable()
 
-        def fetch_from_dataset():
+        async def fetch_from_dataset():
             if dataset.value == "SphereX":
-                return fetch_spherexpng()
+                await fetch_spherexpng()
             elif dataset.value == "Hello":
-                return fetch_hello()
+                await fetch_hello()
             else:
                 result.set_text("Unsupported dataset")
 
@@ -126,11 +129,19 @@ def register_ui(app: FastAPI):
                 f'{frame_index + 1} / {len(frames)} — {frame.get("date", "")}'
             )
 
+        def prev_frame():
+            nonlocal frame_index
+            if frames:
+                frame_index = (frame_index - 1) % len(frames)
+                show_frame()
+
         def next_frame():
             nonlocal frame_index
             if frames:
                 frame_index = (frame_index + 1) % len(frames)
                 show_frame()
+
+
 
         timer = ui.timer(1 / frame_rate_slider.value, next_frame, active=False)
         ui.label().bind_text_from(
@@ -141,7 +152,7 @@ def register_ui(app: FastAPI):
             timer.interval = 1 / frame_rate_slider.value
 
         frame_rate_slider.on_value_change(update_frame_rate)
-        
+
 
         async def load_images():
             nonlocal frames, frame_index
@@ -189,6 +200,8 @@ def register_ui(app: FastAPI):
             load_button = ui.button("Load images", on_click=load_images)
             play_button = ui.button("Play", on_click=timer.activate)
             pause_button = ui.button("Pause", on_click=timer.deactivate)
+            ui.button("<", on_click=prev_frame)
+            ui.button(">", on_click=next_frame)
             play_button.disable()
             pause_button.disable()
 
