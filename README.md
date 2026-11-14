@@ -24,6 +24,12 @@ The image playback demo uses bundled PNGs returned by `/images`; it needs no
 database or environment variables. `/spherexpng` remains a placeholder and does
 not yet generate a valid PNG. Wise and Gaia are not implemented.
 
+Vercel sets `VERCEL=1`. In that environment, `main.py` skips NiceGUI's internal
+CPU process pool setup because the runtime lacks multiprocessing semaphores.
+This is a compatibility workaround for NiceGUI 4; recheck it when upgrading
+NiceGUI. Do not use `run.cpu_bound` on this deployment. Async HTTP requests and
+the playback timer do not require this pool.
+
 After deploying a preview, verify Load images, Play/Pause, frame stepping, and
 the FPS slider. Also test refreshing and reconnecting: NiceGUI keeps page state
 in the Python process, and a reconnect to a different instance can lose that
