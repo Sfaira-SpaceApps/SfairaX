@@ -1,0 +1,35 @@
+{
+  "description": "Real SPHEREx QR2 cutouts from consecutive exposures on the same detector; pointings differ. Detector labels are not monochromatic bandpasses.",
+  "frames": [
+    {
+      "id": "example:1",
+      "file": "example-1.fits",
+      "source_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/qr2/level2/2025W17_4B/l2b-v20-2025-240/2/level2_2025W17_4B_0001_1D2_spx_l2b-v20-2025-240.fits",
+      "ra_deg": 164.70686281902516,
+      "dec_deg": 29.140754245693085,
+      "mjd": 60789.750762072,
+      "date": "2025-04-24T18:01:05.843Z",
+      "bandpass": "detector-2"
+    },
+    {
+      "id": "example:2",
+      "file": "example-2.fits",
+      "source_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/qr2/level2/2025W17_4B/l2b-v20-2025-240/2/level2_2025W17_4B_0001_2D2_spx_l2b-v20-2025-240.fits",
+      "ra_deg": 164.61207317218782,
+      "dec_deg": 28.96206494727447,
+      "mjd": 60789.752254329,
+      "date": "2025-04-24T18:03:14.774Z",
+      "bandpass": "detector-2"
+    },
+    {
+      "id": "example:3",
+      "file": "example-3.fits",
+      "source_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/qr2/level2/2025W17_4B/l2b-v20-2025-240/2/level2_2025W17_4B_0001_3D2_spx_l2b-v20-2025-240.fits",
+      "ra_deg": 164.5184365130723,
+      "dec_deg": 28.783163658490142,
+      "mjd": 60789.753746574,
+      "date": "2025-04-24T18:05:23.704Z",
+      "bandpass": "detector-2"
+    }
+  ]
+}

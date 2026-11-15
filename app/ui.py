@@ -1,4 +1,5 @@
 from datetime import date
+import json
 
 import httpx
 from fastapi import FastAPI
@@ -7,6 +8,7 @@ from nicegui import ui
 def register_ui(app: FastAPI):
     @ui.page("/")
     def index():
+        ui.add_head_html('<script src="/assets/js/playback.js"></script>')
         result = ui.label("Click button to load a result")
         with ui.row().classes("items-center gap-4"):
             dataset = ui.select(["SphereX", "Wise", "Gaia", "Hello"], label="Dataset", value="SphereX")
@@ -88,10 +90,7 @@ def register_ui(app: FastAPI):
         button = ui.button("Load result", on_click=fetch_from_dataset)
 
         ui.label("Image playback").classes("text-xl font-bold")
-        frames = []
-        frame_index = 0
-
-        image = ui.image().classes("w-full max-w-xl")
+        image = ui.element("div").classes("w-full max-w-xl")
         image.set_visibility(False)
         frame_label = ui.label("Load images to begin playback.")
 
@@ -100,46 +99,23 @@ def register_ui(app: FastAPI):
             "w-64"
         ).props("label")
 
-        def show_frame():
-            frame = frames[frame_index]
-            image.set_source(frame["src"])
-            image.set_visibility(True)
-            frame_label.set_text(
-                f'{frame_index + 1} / {len(frames)} — {frame.get("date", "")}'
-            )
-
-        def prev_frame():
-            nonlocal frame_index
-            if frames:
-                frame_index = (frame_index - 1) % len(frames)
-                show_frame()
-
-        def next_frame():
-            nonlocal frame_index
-            if frames:
-                frame_index = (frame_index + 1) % len(frames)
-                show_frame()
-
-
-
-        timer = ui.timer(1 / frame_rate_slider.value, next_frame, active=False)
         ui.label().bind_text_from(
             frame_rate_slider, "value", backward=lambda value: f"{value:g} FPS"
         )
 
-        def update_frame_rate():
-            timer.interval = 1 / frame_rate_slider.value
+        frame_rate_slider.on(
+            "update:model-value", js_handler="value => window.SpherexPlayback.setRate(value)"
+        )
 
-        frame_rate_slider.on_value_change(update_frame_rate)
 
-
-        async def load_images(mock=False):
-            nonlocal frames, frame_index
-            timer.deactivate()
-            load_button.disable()
+        async def load_images():
+            ui.run_javascript("window.SpherexPlayback.pause()")
             button.disable()
             play_button.disable()
             pause_button.disable()
+            prev_button.disable()
+            next_button.disable()
+            image.set_visibility(False)
             frame_label.set_text("Loading images...")
 
             try:
@@ -148,37 +124,33 @@ def register_ui(app: FastAPI):
                     base_url="http://internal",
                     timeout=120,
                 ) as client:
-                    if mock:
-                        response = await client.get("/images")
-                    else:
-                        date_parts = (date_input.value or "").split(" - ")
-                        if len(date_parts) != 2:
-                            raise ValueError("Enter a start and end date: YYYY-MM-DD - YYYY-MM-DD.")
-                        try:
-                            start, end = [date.fromisoformat(part.strip()) for part in date_parts]
-                        except ValueError:
-                            raise ValueError("Enter valid dates in YYYY-MM-DD format.") from None
-                        if start > end:
-                            raise ValueError("Start date must precede end date.")
-                        response = await client.get(
-                            "/spherex/observations",
-                            params={
-                                "ra_deg": right_angle.value,
-                                "dec_deg": declination.value,
-                                "cutout_size_i": cutout_size.value,
-                                "fake_color_theme": color_theme.value,
-                                "time_start": start.isoformat(),
-                                "time_end": end.isoformat(),
-                            },
-                        )
+                    date_parts = (date_input.value or "").split(" - ")
+                    if len(date_parts) != 2:
+                        raise ValueError("Enter a start and end date: YYYY-MM-DD - YYYY-MM-DD.")
+                    try:
+                        start, end = [date.fromisoformat(part.strip()) for part in date_parts]
+                    except ValueError:
+                        raise ValueError("Enter valid dates in YYYY-MM-DD format.") from None
+                    if start > end:
+                        raise ValueError("Start date must precede end date.")
+                    response = await client.get(
+                        "/spherex/observations",
+                        params={
+                            "ra_deg": right_angle.value,
+                            "dec_deg": declination.value,
+                            "cutout_size_i": cutout_size.value,
+                            "fake_color_theme": color_theme.value,
+                            "time_start": start.isoformat(),
+                            "time_end": end.isoformat(),
+                        },
+                    )
                     response.raise_for_status()
 
                 loaded_frames = response.json()["frames"]
-                if not mock:
-                    loaded_frames = [
-                        {**frame, "src": frame["image_url"]}
-                        for frame in sorted(loaded_frames, key=lambda frame: frame["mjd"])
-                    ]
+                loaded_frames = [
+                    {**frame, "src": frame["image_url"]}
+                    for frame in sorted(loaded_frames, key=lambda frame: frame["mjd"])
+                ]
                 if not isinstance(loaded_frames, list) or any(
                     not isinstance(frame, dict)
                     or not isinstance(frame.get("src"), str)
@@ -187,18 +159,28 @@ def register_ui(app: FastAPI):
                 ):
                     raise ValueError("Invalid image frames")
 
-                frames = loaded_frames
-                frame_index = 0
-                if frames:
-                    show_frame()
+                if loaded_frames:
+                    frame_label.set_text(f"Downloading {len(loaded_frames)} images before playback...")
+                    preload = await ui.run_javascript(
+                        f"return await window.SpherexPlayback.load({json.dumps(loaded_frames)}, "
+                        f"{json.dumps(image.html_id)}, {json.dumps(frame_label.html_id)})",
+                        timeout=130,
+                    )
+                    if preload.get("error"):
+                        raise ValueError(preload["error"])
+                    image.set_visibility(True)
                     play_button.enable()
                     pause_button.enable()
-                    result.set_text(f"Loaded {len(frames)} frames.")
+                    prev_button.enable()
+                    next_button.enable()
+                    message = response.json().get("message")
+                    if preload.get("example") and not message:
+                        message = "IRSA image unavailable — displaying labeled example data."
+                    result.set_text(message or f"Loaded {len(loaded_frames)} frames. Ready for playback.")
                 else:
                     image.set_visibility(False)
                     frame_label.set_text("No images returned.")
-            except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-                frames = []
+            except (httpx.HTTPError, ValueError, KeyError, TypeError, TimeoutError) as exc:
                 image.set_visibility(False)
                 message = "Failed to load images. Try again."
                 if isinstance(exc, httpx.HTTPStatusError):
@@ -213,19 +195,20 @@ def register_ui(app: FastAPI):
                 frame_label.set_text(message)
                 result.set_text(message)
             finally:
-                load_button.enable()
                 button.enable()
 
         with ui.row().classes("items-center gap-4"):
-            async def load_mock_images():
-                await load_images(mock=True)
-
-            load_button = ui.button("Load mock images", on_click=load_mock_images)
-            play_button = ui.button("Play", on_click=timer.activate)
-            pause_button = ui.button("Pause", on_click=timer.deactivate)
-            ui.button("<", on_click=prev_frame)
-            ui.button(">", on_click=next_frame)
+            play_button = ui.button("Play").on(
+                "click", js_handler="() => window.SpherexPlayback.play()")
+            pause_button = ui.button("Pause").on(
+                "click", js_handler="() => window.SpherexPlayback.pause()")
+            prev_button = ui.button("<").on(
+                "click", js_handler="() => window.SpherexPlayback.step(-1)")
+            next_button = ui.button(">").on(
+                "click", js_handler="() => window.SpherexPlayback.step(1)")
             play_button.disable()
             pause_button.disable()
+            prev_button.disable()
+            next_button.disable()
 
     ui.run_with(app)

@@ -4,12 +4,17 @@ from pathlib import Path
 from typing import Union, Optional, Tuple
 from datetime import datetime, date
 import re
+import json
+import logging
+import time
+import requests
 
 import pyvo
 from astropy.coordinates import SkyCoord
 from astropy.time import Time
 import astropy.units as u
 from astropy.io import fits
+from astropy.table import Table
 from astropy.visualization import simple_norm
 import matplotlib
 
@@ -27,6 +32,57 @@ class SpherexUpstreamError(Exception):
 
 
 _render_lock = Lock()  # Protect pyplot's shared state during concurrent requests.
+_examples_dir = Path(__file__).resolve().parents[1] / "data" / "spherex_examples"
+logger = logging.getLogger(__name__)
+EXAMPLE_MESSAGE = (
+    "IRSA unavailable — displaying example SPHEREx data. Requested coordinates, "
+    "size and dates do not apply; example exposures have different pointings."
+)
+
+
+class _BoundedSession(requests.Session):
+    """Apply timeouts to PyVO's catalog and capability requests alike."""
+
+    def request(self, method, url, **kwargs):
+        kwargs["timeout"] = (3, 8)
+        return super().request(method, url, **kwargs)
+
+
+def example_manifest():
+    return json.loads((_examples_dir / "manifest.json").read_text(encoding="utf-8"))
+
+
+def example_frame(artifact_uri):
+    for frame in example_manifest()["frames"]:
+        if frame["id"] == artifact_uri:
+            return frame
+    raise ValueError("Unknown SPHEREx example ID.")
+
+
+def example_observations():
+    """Fixed examples deliberately ignore the requested sky position and dates."""
+    rows = Table(rows=[
+        (frame["id"], frame["id"], frame["mjd"], frame["bandpass"])
+        for frame in example_manifest()["frames"]
+    ], names=("artifact_uri", "download_url", "time_bounds_lower", "energy_bandpassname"))
+    rows.sort("time_bounds_lower")
+    rows.meta["source"] = "example"
+    return rows
+
+
+def render_available_frame(fits_url, fake_color_theme="gray", vmin=None, vmax=None):
+    """Return (PNG, lower, upper, example metadata), falling back on I/O failure."""
+    try:
+        rendered = render_spherex_frame(fits_url, fake_color_theme, vmin, vmax)
+        frame = example_frame(fits_url) if str(fits_url).startswith("example:") else None
+    except SpherexUpstreamError:
+        if str(fits_url).startswith("example:"):
+            raise  # A broken deployment must not recurse into fallback.
+        logger.warning("IRSA image unavailable; using bundled SPHEREx example.", exc_info=True)
+        frame = example_manifest()["frames"][0]
+        # Live-image brightness limits do not describe the substituted example.
+        rendered = render_spherex_frame(frame["id"], fake_color_theme)
+    return (*rendered, frame)
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +171,7 @@ def query_spherex(
     results_table = find_spherex_observations(
         ra_deg, dec_deg, cutout_size_i, time_start, time_end
     )
-    png, _, _ = render_spherex_frame(str(results_table["download_url"][0]), fake_color_theme)
+    png, _, _, _ = render_available_frame(str(results_table["download_url"][0]), fake_color_theme)
     return png
 
 
@@ -124,6 +180,10 @@ def find_spherex_observations(
     bandpass=None, artifact_uri=None,
 ):
     """Find chronological observations without downloading their images."""
+    if not (np.isfinite(ra_deg) and 0 <= ra_deg < 360
+            and np.isfinite(dec_deg) and -90 <= dec_deg <= 90
+            and np.isfinite(cutout_size_i) and 0 < cutout_size_i <= 3600):
+        raise ValueError("Invalid SPHEREx cutout coordinates or size.")
     coord = SkyCoord(ra=ra_deg, dec=dec_deg, unit="deg", frame="icrs")
     cutout_size = cutout_size_i * u.arcsec
     cutout_size_deg = cutout_size.to(u.deg).value
@@ -157,8 +217,9 @@ WHERE 1 = CONTAINS(POINT('ICRS', {coord.ra.value}, {coord.dec.value}), p.poly)
 ORDER BY p.time_bounds_lower, download_url
 """
     try:
-        service = pyvo.dal.TAPService("https://irsa.ipac.caltech.edu/TAP")
-        response = service.search(query)
+        with _BoundedSession() as session:
+            service = pyvo.dal.TAPService("https://irsa.ipac.caltech.edu/TAP", session=session)
+            response = service.search(query)
         if response.status[0] == "OVERFLOW":
             raise SpherexUpstreamError(
                 "IRSA returned an incomplete result set. Please narrow the date range."
@@ -167,7 +228,8 @@ ORDER BY p.time_bounds_lower, download_url
     except SpherexUpstreamError:
         raise
     except Exception as exc:
-        raise SpherexUpstreamError("Unable to query SPHEREx data from IRSA.") from exc
+        logger.warning("IRSA catalog unavailable; using bundled SPHEREx examples: %s", exc)
+        return example_observations()
     if not len(results):
         raise SpherexNotFoundError("No SPHEREx data found coverage for this coordinate.")
     return results
@@ -205,23 +267,24 @@ def render_spherex_frame(fits_url, fake_color_theme="gray", vmin=None, vmax=None
         raise ValueError("Supply both brightness limits together.")
     if vmin is not None and (not np.isfinite(vmin) or not np.isfinite(vmax) or vmin >= vmax):
         raise ValueError("Brightness limits must be finite and increasing.")
-    print(f"Fetching FITS cutout from: {fits_url}")
+    example = example_frame(fits_url) if str(fits_url).startswith("example:") else None
     try:
-        # Read directly from the URL without saving or caching a FITS file.
-        with fits.open(fits_url, cache=False) as hdul:
-            print("\n--- FITS File Info ---")
-            hdul.info()
-
-            image_data = hdul["IMAGE"].data
-            print(f"\nSuccessfully loaded IMAGE extension. Shape: {image_data.shape}")
-            data = image_data.astype(np.float32)
-            flags_header = hdul['FLAGS'].header
-            print(repr(flags_header))
-            flags_data = hdul['FLAGS'].data
-
-            #clean_pixels = (flags_data == 0) # Could be useful? Assuming this works
-            unique_flags = np.unique(flags_data)
-            print("Unique FLAGS values in cutout:", unique_flags)
+        if example:
+            source = _examples_dir / example["file"]
+        else:
+            # Bound both input size and network time; never cache full exposures
+            # or depend on another Vercel instance's temporary files.
+            started = time.monotonic()
+            content = bytearray()
+            with requests.get(fits_url, stream=True, timeout=(3, 8)) as response:
+                response.raise_for_status()
+                for chunk in response.iter_content(64 * 1024):
+                    content.extend(chunk)
+                    if len(content) > 8 * 1024 * 1024 or time.monotonic() - started > 15:
+                        raise SpherexUpstreamError("IRSA cutout exceeded download budget.")
+            source = BytesIO(content)
+        with fits.open(source, cache=False) as hdul:
+            data = hdul["IMAGE"].data.astype(np.float32)
     except Exception as e:
         raise SpherexUpstreamError("Error streaming or opening SPHEREx FITS file.") from e
 
@@ -237,7 +300,12 @@ def render_spherex_frame(fits_url, fake_color_theme="gray", vmin=None, vmax=None
             im = ax.imshow(data, origin="lower", cmap=fake_color_theme, norm=norm)
             plt.colorbar(im, ax=ax, label="MJy/sr")
 
-            ax.set_title("SPHEREx Spectral Image")
+            title = "SPHEREx Spectral Image"
+            if example:
+                title = ("EXAMPLE DATA — requested position/dates do not apply\n"
+                         f"RA {example['ra_deg']:.5f}°, Dec {example['dec_deg']:.5f}°\n"
+                         f"{example['date']} | {example['bandpass']}")
+            ax.set_title(title, fontsize=10 if example else 12)
             ax.axis("off")
             # Return the PNG to the endpoint instead of writing output.png.
             with BytesIO() as output:

@@ -63,9 +63,10 @@ def get_spherex_observations(
         )
         frames = []
         counts = {}
+        is_example = rows.meta.get("source") == "example"
         for row in rows:
             mjd = float(row["time_bounds_lower"])
-            if mjd >= end_mjd:
+            if not is_example and mjd >= end_mjd:
                 continue
             bandpass = str(row["energy_bandpassname"])
             key = (mjd, bandpass)
@@ -75,11 +76,17 @@ def get_spherex_observations(
                 cutout_size_i=cutout_size_i, fake_color_theme=fake_color_theme,
                 mjd=mjd, bandpass=bandpass, artifact_index=index,
                 artifact_uri=str(row["artifact_uri"])))
-            frames.append(dict(mjd=mjd, date=Time(mjd, format="mjd").isot + "Z",
-                bandpass=bandpass, image_url="/spherex/frame?" + params))
+            frame = dict(mjd=mjd, date=Time(mjd, format="mjd").isot + "Z",
+                bandpass=bandpass, image_url="/spherex/frame?" + params)
+            if is_example:
+                example = spherex_service.example_frame(str(row["artifact_uri"]))
+                frame.update({key: example[key] for key in ("ra_deg", "dec_deg", "source_url")})
+            frames.append(frame)
         if not frames:
             raise spherex_service.SpherexNotFoundError("No observations in this date range.")
-        return {"bandpasses": sorted({f["bandpass"] for f in frames}), "frames": frames}
+        return {"bandpasses": sorted({f["bandpass"] for f in frames}), "frames": frames,
+                "source": "example" if is_example else "irsa",
+                "message": spherex_service.EXAMPLE_MESSAGE if is_example else None}
     except (ValueError, spherex_service.SpherexNotFoundError, spherex_service.SpherexUpstreamError) as exc:
         raise _spherex_error(exc) from exc
 
@@ -98,7 +105,10 @@ def get_spherex_frame(
 ):
     """Download a validated artifact directly, avoiding another catalog query."""
     try:
-        if artifact_uri is not None:
+        if artifact_uri is not None and artifact_uri.startswith("example:"):
+            spherex_service.example_frame(artifact_uri)  # Resolve only known bundled IDs.
+            fits_url = artifact_uri
+        elif artifact_uri is not None:
             fits_url = spherex_service.spherex_cutout_url(
                 artifact_uri, ra_deg, dec_deg, cutout_size_i
             )
@@ -109,15 +119,18 @@ def get_spherex_frame(
                 ra_deg, dec_deg, cutout_size_i, mjd - tolerance, mjd + tolerance, bandpass
             )
             # Compare the serialized values after the broader catalog lookup.
-            rows = rows[abs(rows["time_bounds_lower"] - mjd) < 1e-7]
+            if rows.meta.get("source") != "example":
+                rows = rows[abs(rows["time_bounds_lower"] - mjd) < 1e-7]
             if artifact_index >= len(rows):
                 raise spherex_service.SpherexNotFoundError("Observation no longer available.")
             fits_url = str(rows["download_url"][artifact_index])
-        png, lower, upper = spherex_service.render_spherex_frame(
+        png, lower, upper, example = spherex_service.render_available_frame(
             fits_url, fake_color_theme, vmin, vmax
         )
         return Response(png, media_type="image/png", headers={
             "X-Image-Vmin": str(lower), "X-Image-Vmax": str(upper),
+            "X-SPHEREx-Source": "example" if example else "irsa",
+            **({"X-SPHEREx-Example-ID": example["id"]} if example else {}),
         })
     except (ValueError, spherex_service.SpherexNotFoundError, spherex_service.SpherexUpstreamError) as exc:
         raise _spherex_error(exc) from exc
