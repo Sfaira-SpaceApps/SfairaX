@@ -22,12 +22,6 @@ dependencies from `pyproject.toml`. Enable Fluid compute for WebSocket support.
 
 ## SPHEREx outage fallback
 
-`query_spherex(..., cutout_size_i=180.0)` and all SPHEREx API endpoints accept
-cutout size in **arcseconds**, defaulting to 180 and allowing sizes greater than
-zero up to 3600. The service converts arcseconds to degrees when constructing
-IRSA cutout URLs (180 arcseconds becomes `size=0.05`). Bundled outage examples
-have a fixed size, as indicated by the fallback warning.
-
 Playback downloads all frames up front (up to three simultaneous requests) and
 waits until every image has decoded before enabling Play. Play, Pause, stepping,
 and timing run in the browser, reusing those decoded images without per-frame
