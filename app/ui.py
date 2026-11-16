@@ -17,8 +17,8 @@ def register_ui(app: FastAPI):
             declination = ui.number(label="Declination", value=0, format='%.2f')
             color_theme = ui.select(["plasma", "viridis", "inferno", "magma"], label="Color Theme", value="plasma")
             cutout_size = ui.number(
-                label="Cutout Size (arcsec)", value=0.05, min=0.01, max=1,
-                step=0.01, format='%.2f',
+                label="Cutout Size (arcsec)", value=180, min=1, max=3599,
+                step=1, format='%.2f',
             )
 
             with ui.input(
@@ -82,8 +82,7 @@ def register_ui(app: FastAPI):
         async def fetch_from_dataset():
             if dataset.value == "SphereX":
                 await fetch_spherexpng()
-            elif dataset.value == "Hello":
-                await fetch_hello()
+            
             else:
                 result.set_text("Unsupported dataset")
 
