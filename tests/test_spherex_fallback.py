@@ -157,3 +157,32 @@ def test_pyvo_session_always_sets_network_timeout(monkeypatch):
     with service._BoundedSession() as session:
         session.get("https://example.test", timeout=None)
     assert request.call_args.kwargs["timeout"] == (3, 8)
+
+
+@pytest.mark.parametrize("size", [180, 3600])
+def test_api_passes_arcseconds_to_service(client, monkeypatch, size):
+    query = Mock(return_value=b"png")
+    monkeypatch.setattr(service, "query_spherex", query)
+    response = client.get("/spherexpng", params=dict(ra_deg=0, dec_deg=0, cutout_size_i=size))
+    assert response.status_code == 200
+    assert query.call_args.args[2] == size
+
+
+def test_default_size_is_180_arcseconds(client, monkeypatch):
+    query = Mock(return_value=b"png")
+    monkeypatch.setattr(service, "query_spherex", query)
+    assert client.get("/spherexpng", params=dict(ra_deg=0, dec_deg=0)).status_code == 200
+    assert query.call_args.args[2] == 180
+
+
+def test_cutout_url_converts_arcseconds_to_degrees():
+    from urllib.parse import parse_qs, urlparse
+
+    url = service.spherex_cutout_url("ibe/data/spherex/test.fits", 0, 0, 180)
+    assert float(parse_qs(urlparse(url).query)["size"][0]) == pytest.approx(0.05)
+
+
+@pytest.mark.parametrize("size", [0, -1, 3601])
+def test_api_rejects_invalid_cutout_sizes(client, size):
+    assert client.get("/spherexpng", params=dict(
+        ra_deg=0, dec_deg=0, cutout_size_i=size)).status_code == 422

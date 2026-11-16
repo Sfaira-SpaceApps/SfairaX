@@ -19,7 +19,7 @@ router = APIRouter()
 def spherexpng(
     ra_deg: float = Query(..., ge=0, lt=360, allow_inf_nan=False),
     dec_deg: float = Query(..., ge=-90, le=90, allow_inf_nan=False),
-    cutout_size_i: float = Query(0.05, gt=0, le=1, allow_inf_nan=False),
+    cutout_size_i: float = Query(180.0, gt=0, le=3600, allow_inf_nan=False, description="Cutout size in arcseconds."),
     fake_color_theme: str = Query("gray", max_length=64),
 ) -> Response:
      # Implement the logic to return the PNG image here
@@ -47,7 +47,7 @@ def _spherex_error(exc):
 def get_spherex_observations(
     ra_deg: float = Query(..., ge=0, lt=360, allow_inf_nan=False),
     dec_deg: float = Query(..., ge=-90, le=90, allow_inf_nan=False),
-    cutout_size_i: float = Query(0.05, gt=0, le=1, allow_inf_nan=False),
+    cutout_size_i: float = Query(180.0, gt=0, le=3600, allow_inf_nan=False, description="Cutout size in arcseconds."),
     fake_color_theme: str = Query("gray", max_length=64),
     time_start: date = Query(...),
     time_end: date = Query(...),
@@ -98,7 +98,7 @@ def get_spherex_frame(
     bandpass: str = Query(..., min_length=1, max_length=128),
     artifact_index: int = Query(0, ge=0),
     artifact_uri: str | None = Query(None, min_length=1, max_length=2048),
-    cutout_size_i: float = Query(0.05, gt=0, le=1, allow_inf_nan=False),
+    cutout_size_i: float = Query(180.0, gt=0, le=3600, allow_inf_nan=False, description="Cutout size in arcseconds."),
     fake_color_theme: str = Query("gray", max_length=64),
     vmin: float | None = Query(None, allow_inf_nan=False),
     vmax: float | None = Query(None, allow_inf_nan=False),

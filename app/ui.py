@@ -17,7 +17,7 @@ def register_ui(app: FastAPI):
             declination = ui.number(label="Declination", value=0, format='%.2f')
             color_theme = ui.select(["plasma", "viridis", "inferno", "magma"], label="Color Theme", value="plasma")
             cutout_size = ui.number(
-                label="Cutout Size (arcsec)", value=180, min=1, max=3599,
+                label="Cutout Size (arcsec)", value=180, min=1, max=3600,
                 step=1, format='%.2f',
             )
 
